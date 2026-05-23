@@ -29,15 +29,35 @@ class BotSpaceClient:
         self.api_url = (
             api_url or os.getenv("BOTSPACE_API_URL", "https://api.botspace.uz")
         ).rstrip("/")
-        self.token = token or os.getenv("BOTSPACE_API_TOKEN", "")
+        self._raw_token = token or os.getenv("BOTSPACE_API_TOKEN", "")
+        self._jwt: str | None = None
         self._client = httpx.AsyncClient(base_url=self.api_url, timeout=30.0)
 
+    async def _ensure_jwt(self) -> str:
+        if self._jwt:
+            return self._jwt
+        if self._raw_token.startswith("bsp_"):
+            r = await self._client.post(
+                "/auth/token/exchange/",
+                json={"token": self._raw_token},
+            )
+            r.raise_for_status()
+            data = r.json()
+            inner = data.get("data", data)
+            self._jwt = inner["access"]
+            return self._jwt
+        self._jwt = self._raw_token
+        return self._jwt
+
     def _headers(self) -> dict[str, str]:
-        if self.token:
-            return {"Authorization": f"Bearer {self.token}"}
+        if self._jwt:
+            return {"Authorization": f"Bearer {self._jwt}"}
+        if self._raw_token:
+            return {"Authorization": f"Bearer {self._raw_token}"}
         return {}
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> Any:
+        await self._ensure_jwt()
         headers = {**self._headers(), **kwargs.pop("headers", {})}
         try:
             r = await self._client.request(method, path, headers=headers, **kwargs)
