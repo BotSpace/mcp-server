@@ -1,26 +1,24 @@
-"""BotSpace MCP Server — HTTP+SSE transport with OAuth.
+"""BotSpace MCP Server — Streamable HTTP + legacy SSE transport.
 
-Runs as a standalone HTTP server. Users connect via:
-  https://botspace.uz/mcp/sse
-
+Endpoint: https://api.botspace.uz/mcp/
 Authentication: Bearer token in Authorization header.
-The token is the user's BotSpace access JWT (from dashboard login).
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
+import uuid
 
 from mcp.server import Server
 from mcp.server.sse import SseServerTransport
+from mcp.server.streamable_http import StreamableHTTPServerTransport
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
-from starlette.routing import Mount, Route
+from starlette.routing import Route
 
 from .tools import register_tools
 
@@ -37,35 +35,73 @@ def _extract_bearer(request: Request) -> str | None:
 
 def create_app() -> Starlette:
     server = Server("botspace-mcp")
-    sse = SseServerTransport("/messages/")
-
     register_tools(server)
 
-    async def handle_sse(request: Request) -> Response:
-        token = _extract_bearer(request)
-        if not token:
-            return JSONResponse(
-                {"error": "Missing Authorization header. Use: Bearer <your-botspace-token>"},
-                status_code=401,
-            )
-        request.state.token = token
-        async with sse.connect_sse(request.scope, request.receive, request._send) as (
-            read_stream,
-            write_stream,
-        ):
-            await server.run(read_stream, write_stream, server.create_initialization_options())
-        return Response()
+    # Legacy SSE transport
+    sse = SseServerTransport("/messages/")
+
+    # ── Streamable HTTP (new MCP transport — single POST endpoint) ──
+
+    async def handle_mcp(request: Request) -> Response:
+        if request.method == "GET":
+            # SSE stream initiation
+            token = _extract_bearer(request)
+            if not token:
+                return JSONResponse({"error": "Bearer token required"}, status_code=401)
+            async with sse.connect_sse(request.scope, request.receive, request._send) as (rs, ws):
+                await server.run(rs, ws, server.create_initialization_options())
+            return Response()
+
+        if request.method == "POST":
+            # Streamable HTTP or SSE message post
+            accept = request.headers.get("accept", "")
+            content_type = request.headers.get("content-type", "")
+
+            # If it's an SSE message post (from legacy /messages/ path redirected here)
+            # Check if this is a Streamable HTTP request (JSON-RPC over HTTP)
+            if "application/json" in content_type:
+                token = _extract_bearer(request)
+                if not token:
+                    return JSONResponse({"error": "Bearer token required"}, status_code=401)
+
+                transport = StreamableHTTPServerTransport(
+                    mcp_session_id=str(uuid.uuid4()),
+                    is_stateless=True,
+                )
+                async with transport.connect() as (rs, ws):
+                    import asyncio
+                    run_task = asyncio.create_task(
+                        server.run(rs, ws, server.create_initialization_options())
+                    )
+                    response = await transport.handle_request(
+                        request.scope, request.receive, request._send
+                    )
+                    run_task.cancel()
+                    try:
+                        await run_task
+                    except asyncio.CancelledError:
+                        pass
+                return response
+
+            # Fallback: legacy SSE message post
+            return await sse.handle_post_message(request.scope, request.receive, request._send)
+
+        if request.method == "DELETE":
+            return JSONResponse({"status": "session_terminated"})
+
+        return JSONResponse({"error": "Method not allowed"}, status_code=405)
 
     async def handle_messages(request: Request) -> Response:
         return await sse.handle_post_message(request.scope, request.receive, request._send)
 
     async def handle_health(request: Request) -> Response:
-        return JSONResponse({"status": "ok", "service": "botspace-mcp", "version": "0.2.0"})
+        return JSONResponse({"status": "ok", "service": "botspace-mcp", "version": "0.3.0"})
 
     app = Starlette(
         routes=[
             Route("/health", handle_health),
-            Route("/sse", handle_sse),
+            Route("/", handle_mcp, methods=["GET", "POST", "DELETE"]),
+            Route("/sse", handle_mcp, methods=["GET", "POST", "DELETE"]),
             Route("/messages/", handle_messages, methods=["POST"]),
         ],
         middleware=[
@@ -74,6 +110,7 @@ def create_app() -> Starlette:
                 allow_origins=["*"],
                 allow_methods=["*"],
                 allow_headers=["*"],
+                expose_headers=["mcp-session-id"],
             ),
         ],
     )
