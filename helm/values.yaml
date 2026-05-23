@@ -2,7 +2,7 @@ replicaCount: 1
 
 image:
   repository: registry.iprogrammer.uz/botspace/mcp-server
-  tag: "latest"
+  tag: "e374aa4"
   pullPolicy: Always
 
 imagePullSecrets:
