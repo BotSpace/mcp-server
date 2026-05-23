@@ -1,0 +1,85 @@
+replicaCount: 1
+
+image:
+  repository: registry.iprogrammer.uz/botspace/mcp-server
+  tag: "latest"
+  pullPolicy: Always
+
+imagePullSecrets:
+  - name: iprogrammer-registry
+
+fullnameOverride: "mcp-server"
+
+serviceAccount:
+  create: false
+  name: ""
+
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+
+service:
+  enabled: true
+  type: ClusterIP
+  port: 8200
+  targetPort: 8200
+
+configMaps:
+  config:
+    MCP_HOST: "0.0.0.0"
+    MCP_PORT: "8200"
+    BOTSPACE_API_URL: "http://web:8000"
+
+probes:
+  startup:
+    enabled: true
+    type: httpGet
+    httpGet:
+      path: /health
+      port: 8200
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 12
+  readiness:
+    enabled: true
+    type: httpGet
+    httpGet:
+      path: /health
+      port: 8200
+    initialDelaySeconds: 3
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+  liveness:
+    enabled: true
+    type: httpGet
+    httpGet:
+      path: /health
+      port: 8200
+    initialDelaySeconds: 15
+    periodSeconds: 30
+    timeoutSeconds: 5
+    failureThreshold: 3
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: name
+              operator: NotIn
+              values:
+                - base
+
+terminationGracePeriodSeconds: 15
