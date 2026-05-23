@@ -21,13 +21,15 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
 
+from pydantic import AnyHttpUrl
+
 from .auth import BotSpaceOAuthProvider
 from .tools import register_tools
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("botspace-mcp")
 
-MCP_BASE_URL = os.getenv("MCP_BASE_URL", "https://api.botspace.uz/mcp")
+MCP_BASE_URL: AnyHttpUrl = AnyHttpUrl(os.getenv("MCP_BASE_URL", "https://api.botspace.uz/mcp"))
 
 
 def create_app() -> Starlette:
