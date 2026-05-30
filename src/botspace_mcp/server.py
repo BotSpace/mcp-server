@@ -89,8 +89,19 @@ def create_app() -> Starlette:
     async def handle_health(request: Request) -> Response:
         return JSONResponse({"status": "ok", "service": "botspace-mcp", "version": "0.4.0"})
 
+    async def handle_metrics(request: Request) -> Response:
+        # Lazy import — prometheus_client is optional. If not installed
+        # the endpoint stays unreachable but the rest of the app keeps
+        # working.
+        try:
+            from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+        except ImportError:
+            return Response("prometheus_client not installed", status_code=503)
+        return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
     all_routes = [
         Route("/health", handle_health),
+        Route("/metrics", handle_metrics),
         Route("/oauth/callback", oauth_callback),
         Route("/mcp", handle_mcp, methods=["POST", "DELETE", "OPTIONS"]),
     ] + auth_routes
